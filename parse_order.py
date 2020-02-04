@@ -1,117 +1,164 @@
+"""Fisher Orders parse script.
+
+This script allows the user to enter a txt file converted from a order 
+confirmation email as a commandline parameter. 
+
+The txt file is parsed for specific data and that data is then written to a csv 
+file which is placed in the user's home directory in a directory labelled 
+'fisher_orders'.
+"""
+
 import argparse
 import csv
 import os.path
+import unicodedata
 
-#Create parser object to with input file as command line argument
+from pathlib import Path
+
+
 def create_parser():
-    # Create an ArgumentParser object and then input file as an add arguments to the object.
-    # parse_args() returns the object with file as an attribute
-    parser = argparse.ArgumentParser(description='Input file handle')
-    parser.add_argument('file')
+    """Creates a parser object to accept input file parameter"""
+    
+    parser = argparse.ArgumentParser(description=__doc__)
+    
+    parser.add_argument('file', help='.txt file used to generate .csv file.')
+    
+    # Returns the object with file as an attribute
     return parser.parse_args()
 
-def open_file(filename):
-    in_file = open(filename, 'r')
-    return in_file
-
-#Parse file for data needed to write a CSV file
-def parse_file(in_file):
-
-    #Rows to return to be written to CSV file
-    rows = {}
-
-    #Lists to keep track of data that occurs more than once in an order
-    description = []
+def parse_file(file):
+    """Parse file for CSV file data and return data as a dictionary"""
+    
+    # Dictionary to hold CSV file data
+    csv_data = {}
+    
+    # Arrays to hold repeated row data
     quantity = []
     unit_price = []
     line_total = []
+    description = []
+    
+    with open(file, 'r') as reader:
+        
+        for line in reader:
+            if line == '\n':
+                continue
+            # Date
+            if line.startswith('Placed:'):
+                csv_data['Order Date'] = get_date(line.split(': ')[1])
+            # Order Number
+            if line.startswith('Fisher Scientific Order'):
+                csv_data['Order Number'] = line.split(': ')[1].strip('\n')
+            # Name
+            if line.startswith('Attention:'):
+                full_name = get_name(line.split(': ')[1].split('/'))
+                csv_data['First Name'] = full_name[0]
+                csv_data['Last Name'] = full_name[1]
+            # Account
+            if line.startswith('Credit Card:'):
+                csv_data['Card Account'] = line.split(': ')[2].strip('\n')
+            # Quantity, Unit Price, Line Total
+            if line.startswith('Cat No.'):
+                data_array = extract_catalog_data(line)
+                quantity.append(float(data_array[0]))
+                unit_price.append(float(data_array[2]))
+                line_total.append(float(data_array[4]))
+            # Description
+            if line.startswith('Description: '):
+                description.append(line.split('Description: ')[1].strip('\n'))
+            # Order Total
+            if line.startswith('*Estimated Order'):
+                order_total = float(next(reader).strip('$\n'))
+                csv_data['Order Total'] = order_total
+        
+        # Add repeated row data to csv_data dictionary
+        csv_data['Quantity Shipped'] = quantity
+        csv_data['Unit Price'] = unit_price
+        csv_data['Amount'] = line_total
+        csv_data['Description'] = description                
+        
+        return csv_data
 
-    for line in in_file:
-        line = line.strip('\n')
-        #Retrieve name of person who placed the order
-        if line.startswith('Order Created By:'):
-            full_name = (line.split(': '))[1]
-            first_name = (full_name.split(' '))[0]
-            last_name = (full_name.split(' '))[1]
-        #Retrieve the date the order was placed
-        if line.startswith('Placed: '):
-            full_date = (line.split(': '))[1]
-            date = create_date(full_date)
-        #Retrieve last four of the credit card used to place the order
-        if line.startswith('Credit Card:'):
-            full_card = (line.split(': ', 1))[1]
-            credit_card = (full_card.split(": "))[1]
-        #Retrieve quantity, unit price, line total
-        if line.startswith('Cat No.: '):
-            #Quantity
-            full_quantity = (line.split('Qty: '))[1]
-            half_quantity = (full_quantity.split('U'))[0]
-            quarter_quantity = (half_quantity.split('\xc2'))[0]
-            quantity.append(quarter_quantity)
-            #Unit price
-            full_unit_price = (line.split('Price: $'))[1]
-            half_unit_price = (full_unit_price.split('L'))[0]
-            quarter_unit_price = (half_unit_price.split('\xc2'))[0]
-            unit_price.append(quarter_unit_price)
-            #Line total
-            line_total.append((line.split('Line Total: $'))[1])
-        #Retrieve item description
-        if line.startswith('Description: '):
-            description.append((line.split('Description: '))[1])
-        #Retrieve order total
-        if line.startswith('$'):
-            order_total = (line.split('$'))[1]
-    #Close file
-    in_file.close()
-    #Create CSV filename using last name and appending _fisher
-    filename = last_name.lower() +'_fisher'
-    #Create a dictionary of rows so that each row is a tuple containing order data
-    for key in range(len(description)):
-        rows[key] = (first_name, last_name, description[key], int(quantity[key]), float(unit_price[key]),
-                     float(line_total[key]), float(order_total), date, int(credit_card))
-    return rows, filename
+def extract_catalog_data(line):
+    """Returns array of quantity, unit price, and line total data"""
+    
+    # Normalize line data
+    line_data = line.split('Qty: ')[1].split(' ')
+    data_array = list(map(normalize_data, line_data))
+    
+    # Pull out order data
+    for index, element in enumerate(data_array):
+        data_array[index] = element.split(' ')[0].strip('\n$')
+        
+    return data_array
 
-#Creates a date string
-def create_date(date):
-    months={1:'Jan', 2:'Feb', 3:'Mar', 4:'Apr', 5:'May', 6:'Jun',
-            7:'Jul', 8:'Aug', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dec'}
-    month = (date.split(" "))[1]
-    for key, value in months.items():
-        if month == value:
-            month = key
-    day = (date.split(" "))[2]
-    year = (date.split(" "))[5]
-    return str(month) + '/' + str(day) + '/' + str(year)
+def get_date(date_string):
+    """Returns date: mm/dd/yyyy"""
+    
+    date_array = date_string.split(' ')
+    
+    month = get_month_num(date_array[1])
+    
+    return f"{month}/{date_array[2]}/{date_array[5]}"
+    
+def get_month_num(month_string):
+    """Return month parameter as a number (string)"""
+    
+    months = {'Jan':'1', 'Feb':'2', 'Mar':'3', 'Apr':'4', 'May':'5', 'Jun':'6',
+              'Jul':'7', 'Aug':'8', 'Sep':'9', 'Oct':'10', 'Nov':'11', 
+              'Dec':'12'}
+    
+    return months[month_string]
 
-#Creates a list of column headers
-def create_columns():
-    return ['First Name', 'Last Name', 'Description', 'Quantity shipped', 'Unit price', 'Amount',
-            'Order Total', 'Order Date', 'Card Account #']
+def get_name(name_string):
+    """Return array of first initial [0] and last name [1]"""
+    
+    full_name = name_string[0].split(' ')
+    
+    return [full_name[0], full_name[1]]
 
-#Write CSV file
-def write_csv(filename, columns, rows):
-        #Create a file to write to
-        csv_file = get_file_path(filename);
-        #Write to CSV file writing column names first and then row data
-        with open(csv_file, mode='w') as csv_file:
-            csv_writer = csv.writer(csv_file)
-            csv_writer.writerow(columns)
-            for key, values in rows.items():
-                csv_writer.writerow(values)
-        #Close CSV file; done writing to it
-        csv_file.close()
-        print("File written to: ", filename + ".csv")
+def normalize_data(data):
+    """Return normalized data"""
+    
+    return unicodedata.normalize('NFKD', data).strip(' ')
 
-#Creates path to save CSV file to
-def get_file_path(filename):
-    save_path = '/Users/ntadmin/Desktop/fisher_orders'
-    return os.path.join(save_path, filename + ".csv")
+def write_csv(data_dictionary):
+    """Writes dictionary to CSV file"""
+    
+    # CSV file path and name
+    csv_file_path = get_csv_file_path()
+    file_name = csv_file_path.joinpath(data_dictionary['Last Name'] + '.csv')
+    
+    # Column names
+    fieldnames = ['First Name', 'Last Name', 'Description', 'Quantity Shipped', 
+                'Unit Price', 'Amount', 'Order Total', 'Order Date', 
+                'Card Account', 'Order Number']
 
-def main():
+    # Write dictionary data to csv file
+    with open(file_name, mode='w') as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for index, element in enumerate(data_dictionary['Quantity Shipped']):
+            writer.writerow({'First Name': data_dictionary['First Name'], 
+                'Last Name': data_dictionary['Last Name'], 
+                'Description': data_dictionary['Description'][index], 
+                'Quantity Shipped': element, 
+                'Unit Price': data_dictionary['Unit Price'][index],
+                'Amount': data_dictionary['Amount'][index],
+                'Order Total': data_dictionary['Order Total'], 
+                'Order Date': data_dictionary['Order Date'], 
+                'Card Account': data_dictionary['Card Account'], 
+                'Order Number': data_dictionary['Order Number']})
+
+def get_csv_file_path():
+    """Returns file path for CSV file"""
+
+    csv_file_path = Path.home().joinpath('Desktop', 'fisher_orders')
+    csv_file_path.mkdir(exist_ok=True)
+    return csv_file_path
+    
+if __name__ == "__main__":
+    
     args = create_parser()
-    contents = open_file(args.file)
-    rows, out_file = parse_file(contents)
-    columns = create_columns()
-    write_csv(out_file, columns, rows)
-
-main()
+    data_dictionary = parse_file(args.file)
+    write_csv(data_dictionary)
