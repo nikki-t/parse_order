@@ -112,10 +112,20 @@ def get_month_num(month_string):
 
 def get_name(name_string):
     """Return array of first initial [0] and last name [1]"""
+
+    name = name_string[0].split(' ')
+
+    # Test for length of name
+    if len(name) > 1:
+        full_name = [name[0], name[1]]
+    else:
+        # If order only has one name, return first name as a blank string
+        # and last name as name
+        full_name = [' ', name[0]]
+
+    return full_name
     
-    full_name = name_string[0].split(' ')
-    
-    return [full_name[0], full_name[1]]
+    #return [full_name[0], full_name[1]]
 
 def normalize_data(data):
     """Return normalized data"""
