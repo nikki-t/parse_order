@@ -124,8 +124,6 @@ def get_name(name_string):
         full_name = [' ', name[0]]
 
     return full_name
-    
-    #return [full_name[0], full_name[1]]
 
 def normalize_data(data):
     """Return normalized data"""
